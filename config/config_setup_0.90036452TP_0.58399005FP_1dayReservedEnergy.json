@@ -1,0 +1,64 @@
+{
+    "visiting_sensor": 3,
+    "max_missing_fire_min": 60,
+    "ML_Performance": {
+        "TP_rate": 0.90036452,
+        "FP_rate": 0.58399005,
+        "accuracy": 66.11
+    },
+    "Initial_Battery_Levels": {
+        "exact": 19.24
+    },
+    "Energy_Constraints": {
+        "reserved_energy": 0.3024,
+        "battery_energy": 19.24,
+        "E_camera_host": 2.823e-05,
+        "E_comm": 0.0138889,
+        "E_proc_ml": 0.00031626819795303057,
+        "E_proc_rl": 0.00031626819795303057,
+        "E_temp_humidity_sensor": 6.66667e-08,
+        "E_anemometer_sensor": 2.11241e-05
+    },
+    "Standby_Power_Components": {
+        "P_temp_humidity_standby": 2e-06,
+        "P_anemometer_standby": 0.000901,
+        "P_camera_standby": 0.000235,
+        "P_comm_standby": 6.6e-06
+    },
+    "Reward_Params": {
+        "R_max_d": 500,
+        "R_max_m": 20,
+        "alpha_d": 1,
+        "alpha_m": 1,
+        "alpha_B": 525600,
+        "R_min": 5000,
+        "beta": 0.5,
+        "k1": 100,
+        "k2": 2
+    },
+    "TD3_params": {
+        "gamma": 1,
+        "tau": 0.01,
+        "learning_rate": 0.0005,
+        "sigma_start": 5,
+        "sigma_end": 1,
+        "decay_type": "linear",
+        "total_timesteps": 5000,
+        "warm_up": 1000,
+        "target_decay_step": 2500,
+        "batch_size": 256,
+        "buffer_size": 200000,
+        "min_sampling_time": 1,
+        "max_sampling_time": 30
+    },
+    "Neighborhood_Communication": {
+        "num_neighbors": 3,
+        "E_comm_neighbor": 0
+    },
+    "harvested_energy_loss": 0.85,
+    "E_battery_leakage_percentage": 2.3148148148148148e-07,
+    "max_offset_per_sensor": 60, 
+    "episode_length_days": 180,
+    "parallel_batch_size": 25,
+    "file_name": "_episode_plots_step_reward_RL_beta0p5_0.90036452TP_0.58399005FP_noOffset_1dayReservedEnergy"
+}
