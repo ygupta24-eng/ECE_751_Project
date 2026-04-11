@@ -11,9 +11,18 @@ from joblib import load
 from data_utils import normalize_feature
 
 class TrustFactorAlgorithm:
-    def __init__(self, window_size=10, ema_alpha=0.04):
-        self.window_size = window_size
-        self.ema_alpha = ema_alpha
+    def __init__(self, params):
+        self.window_size = params.get("window_size", 60)
+        self.ema_alpha = params.get("ema_alpha", 0.04)
+        self.min_temp = params.get("min_temp_threshold", -50)
+        self.max_temp = params.get("max_temp_threshold", 100)
+        self.penalty_bounds = params.get("penalty_out_of_bounds", 50)
+        self.penalty_flatline = params.get("penalty_flatline", 30)
+        self.z_score_thresh = params.get("z_score_threshold", 3)
+        self.penalty_z_score = params.get("penalty_high_z_score", 10)
+        self.healthy_thresh = params.get("state_threshold_healthy", 90)
+        self.warning_thresh = params.get("state_threshold_warning", 70)
+
         self.history = []
         self.ema_trust = 100.0
 
@@ -22,22 +31,22 @@ class TrustFactorAlgorithm:
         z_score = 0.0
         
         # Phase 1: Ingestion & Fast Filters
-        if value < -50 or value > 100:
-            penalty = 50
+        if value < self.min_temp or value > self.max_temp:
+            penalty = self.penalty_bounds
         else:
             # Phase 2: Statistical Filters (Calculate stats BEFORE adding the new value)
             if len(self.history) == self.window_size:
                 variance = np.var(self.history)
                 if variance == 0: # Flatline check
-                    penalty = 30
+                    penalty = self.penalty_flatline
                 else: # Z-score check
                     std_dev = np.sqrt(variance)
                     mean_val = np.mean(self.history)
                     z_score = abs(value - mean_val) / std_dev
 
                     # Lightweight Statistical Anomaly Trigger
-                    if z_score > 3:
-                        penalty = 10
+                    if z_score > self.z_score_thresh:
+                        penalty = self.penalty_z_score
 
         # Keep a rolling history for the NEXT reading
         self.history.append(value)
@@ -55,9 +64,9 @@ class TrustFactorAlgorithm:
         self.ema_trust = (self.ema_alpha * target_trust) + ((1 - self.ema_alpha) * self.ema_trust)
 
         # Evaluate States
-        if self.ema_trust >= 90:
+        if self.ema_trust >= self.healthy_thresh:
             state = "Healthy"
-        elif self.ema_trust >= 70:
+        elif self.ema_trust >= self.warning_thresh:
             state = "Warning"
         else:
             state = "Critical"
@@ -92,7 +101,9 @@ class WildfireEnv(gym.Env):
         self.config = config
         self.start_offset = start_offset
 
-        self.temp_trust_algo = TrustFactorAlgorithm()
+        # Read trust factor params from config and initialize the algorithm
+        trust_factor_params = self.config.get("TrustFactor", {})
+        self.temp_trust_algo = TrustFactorAlgorithm(trust_factor_params)
         self.temp_trust_score = 100.0
 
         self.dt_model = load("weather_fire_detection_model.pkl")
