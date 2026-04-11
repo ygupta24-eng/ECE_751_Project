@@ -10,6 +10,64 @@ from joblib import load
 
 from data_utils import normalize_feature
 
+class TrustFactorAlgorithm:
+    def __init__(self, window_size=10, ema_alpha=0.04):
+        self.window_size = window_size
+        self.ema_alpha = ema_alpha
+        self.history = []
+        self.ema_trust = 100.0
+
+    def process_reading(self, value):
+        penalty = 0
+        z_score = 0.0
+        
+        # Phase 1: Ingestion & Fast Filters
+        if value < -50 or value > 100:
+            penalty = 50
+        else:
+            # Phase 2: Statistical Filters (Calculate stats BEFORE adding the new value)
+            if len(self.history) == self.window_size:
+                variance = np.var(self.history)
+                if variance == 0: # Flatline check
+                    penalty = 30
+                else: # Z-score check
+                    std_dev = np.sqrt(variance)
+                    mean_val = np.mean(self.history)
+                    z_score = abs(value - mean_val) / std_dev
+
+                    # Lightweight Statistical Anomaly Trigger
+                    if z_score > 3:
+                        penalty = 10
+
+        # Keep a rolling history for the NEXT reading
+        self.history.append(value)
+        if len(self.history) > self.window_size:
+            self.history.pop(0)
+
+        # Phase 3: Continuous Trust Decay
+        target_trust = max(0, self.ema_trust - penalty) 
+        
+        # If the sensor is behaving normally, set the target back to 100
+        if penalty == 0:
+            target_trust = 100
+            
+        # Apply exponential moving average
+        self.ema_trust = (self.ema_alpha * target_trust) + ((1 - self.ema_alpha) * self.ema_trust)
+
+        # Evaluate States
+        if self.ema_trust >= 90:
+            state = "Healthy"
+        elif self.ema_trust >= 70:
+            state = "Warning"
+        else:
+            state = "Critical"
+
+        return self.ema_trust, state, z_score
+    
+    def reset(self):
+        self.history = []
+        self.ema_trust = 100.0
+
 
 class Logger(object):
     def __init__(self, filename):
@@ -33,6 +91,9 @@ class WildfireEnv(gym.Env):
         self.df = df  # Store full dataset, select a sensor later
         self.config = config
         self.start_offset = start_offset
+
+        self.temp_trust_algo = TrustFactorAlgorithm()
+        self.temp_trust_score = 100.0
 
         self.dt_model = load("weather_fire_detection_model.pkl")
         self.sensor_selection_count = {sensor: 0 for sensor in df["Sensor"].unique()} 
@@ -90,7 +151,9 @@ class WildfireEnv(gym.Env):
             "ml_result": [],
             "take_a_picture": [],
             "label": [],
-            "reward": []
+            "reward": [],
+            "trust_score": [],
+            "z_score": []
         }
 
         # Observation space (state)
@@ -111,6 +174,10 @@ class WildfireEnv(gym.Env):
         self.sensor_selection_count[self.current_sensor] += 1  # Update visit count
         
         self.last_sampling_time = 0
+
+        # Reset trust algorithm
+        self.temp_trust_algo.reset()
+        self.temp_trust_score = 100.0
         
         # Randomly choose one of the battery levels each episode
         battery_energy_dict = self.config["Initial_Battery_Levels"]
@@ -167,7 +234,9 @@ class WildfireEnv(gym.Env):
             "ml_result": [],
             "take_a_picture": [],
             "label": [],
-            "reward": []
+            "reward": [],
+            "trust_score": [],
+            "z_score": [],
         }
         
         return self.get_state()
@@ -212,7 +281,10 @@ class WildfireEnv(gym.Env):
             self.current_step = len(self.sensor_data) - 1  # Stop at last timestamp
 
         row = self.sensor_data.iloc[self.current_step]
-        
+
+        # Update trust score
+        self.temp_trust_score, _, self.z_score = self.temp_trust_algo.process_reading(row["Temperature_2m"])
+
         features = {
             "avgtempC": row["Temperature_2m"],
             "humid": row["Relative_Humidity_2m"]
@@ -325,6 +397,8 @@ class WildfireEnv(gym.Env):
         self.episode_data["ml_result"].append(ml_result)
         self.episode_data["take_a_picture"].append(take_picture)
         self.episode_data["label"].append(row["Label"])
+        self.episode_data["trust_score"].append(self.temp_trust_score)
+        self.episode_data["z_score"].append(self.z_score)
 
         """ if self.battery_energy > 5:
             self.reward = - k1 * self.last_sampling_time
@@ -401,7 +475,7 @@ class WildfireEnv(gym.Env):
         # Save it to a CSV file
         df2.to_csv(f"{folder}/episode_{self.episode_counter}_{self.current_sensor}.csv", index=False)  # index=False avoids adding an extra index column
 
-        fig, axs = plt.subplots(7, 2, figsize=(15, 20), sharex=True)
+        fig, axs = plt.subplots(8, 2, figsize=(15, 20), sharex=True)
         axs = axs.flatten()
 
         axs[0].scatter(self.episode_data["timestamps"], self.episode_data["harvested_energy"], label="Harvested Energy (Wh)", color='green')
@@ -422,6 +496,8 @@ class WildfireEnv(gym.Env):
         axs[11].scatter(self.episode_data["timestamps"], self.episode_data["missed_fire_times"], label="Missed Fire Time (min)", color='green')
         
         axs[12].scatter(self.episode_data["timestamps"], self.episode_data["reward"], label=f"Step Reward {reason} {final_reward}", color='green')
+        axs[13].scatter(self.episode_data["timestamps"], self.episode_data["trust_score"], label="Temperature Trust Score", color='purple')
+        axs[14].scatter(self.episode_data["timestamps"], self.episode_data["z_score"], label="Temperature Z-Score", color='purple')
         axs[-1].set_xlabel("Timestamp (min)", fontsize=16, fontweight='bold')
         
         if self.fire_start_time is not None:
