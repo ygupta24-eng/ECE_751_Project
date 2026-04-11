@@ -14,8 +14,8 @@ class TrustFactorAlgorithm:
     def __init__(self, params):
         self.window_size = params.get("window_size", 60)
         self.ema_alpha = params.get("ema_alpha", 0.04)
-        self.min_temp = params.get("min_temp_threshold", -50)
-        self.max_temp = params.get("max_temp_threshold", 100)
+        self.min_val = params.get("min_threshold", 0)
+        self.max_val = params.get("max_threshold", 100)
         self.penalty_bounds = params.get("penalty_out_of_bounds", 50)
         self.penalty_flatline = params.get("penalty_flatline", 30)
         self.z_score_thresh = params.get("z_score_threshold", 3)
@@ -31,7 +31,7 @@ class TrustFactorAlgorithm:
         z_score = 0.0
         
         # Phase 1: Ingestion & Fast Filters
-        if value < self.min_temp or value > self.max_temp:
+        if value < self.min_val or value > self.max_val:
             penalty = self.penalty_bounds
         else:
             # Phase 2: Statistical Filters (Calculate stats BEFORE adding the new value)
@@ -101,10 +101,15 @@ class WildfireEnv(gym.Env):
         self.config = config
         self.start_offset = start_offset
 
-        # Read trust factor params from config and initialize the algorithm
-        trust_factor_params = self.config.get("TrustFactor", {})
-        self.temp_trust_algo = TrustFactorAlgorithm(trust_factor_params)
+        # Read trust factor params from config and initialize algorithms for each metric
+        trust_factor_configs = self.config.get("TrustFactor", {})
+        self.temp_trust_algo = TrustFactorAlgorithm(trust_factor_configs.get("Temperature", {}))
+        self.humidity_trust_algo = TrustFactorAlgorithm(trust_factor_configs.get("Humidity", {}))
+        self.wind_trust_algo = TrustFactorAlgorithm(trust_factor_configs.get("Wind", {}))
+
         self.temp_trust_score = 100.0
+        self.humidity_trust_score = 100.0
+        self.wind_trust_score = 100.0
 
         self.dt_model = load("weather_fire_detection_model.pkl")
         self.sensor_selection_count = {sensor: 0 for sensor in df["Sensor"].unique()} 
@@ -163,8 +168,12 @@ class WildfireEnv(gym.Env):
             "take_a_picture": [],
             "label": [],
             "reward": [],
-            "trust_score": [],
-            "z_score": []
+            "temp_trust_score": [],
+            "temp_z_score": [],
+            "humidity_trust_score": [],
+            "humidity_z_score": [],
+            "wind_trust_score": [],
+            "wind_z_score": []
         }
 
         # Observation space (state)
@@ -186,9 +195,13 @@ class WildfireEnv(gym.Env):
         
         self.last_sampling_time = 0
 
-        # Reset trust algorithm
+        # Reset trust algorithms
         self.temp_trust_algo.reset()
+        self.humidity_trust_algo.reset()
+        self.wind_trust_algo.reset()
         self.temp_trust_score = 100.0
+        self.humidity_trust_score = 100.0
+        self.wind_trust_score = 100.0
         
         # Randomly choose one of the battery levels each episode
         battery_energy_dict = self.config["Initial_Battery_Levels"]
@@ -246,8 +259,12 @@ class WildfireEnv(gym.Env):
             "take_a_picture": [],
             "label": [],
             "reward": [],
-            "trust_score": [],
-            "z_score": [],
+            "temp_trust_score": [],
+            "temp_z_score": [],
+            "humidity_trust_score": [],
+            "humidity_z_score": [],
+            "wind_trust_score": [],
+            "wind_z_score": [],
         }
         
         return self.get_state()
@@ -293,8 +310,10 @@ class WildfireEnv(gym.Env):
 
         row = self.sensor_data.iloc[self.current_step]
 
-        # Update trust score
-        self.temp_trust_score, _, self.z_score = self.temp_trust_algo.process_reading(row["Temperature_2m"])
+        # Update trust scores for all metrics
+        self.temp_trust_score, _, temp_z_score = self.temp_trust_algo.process_reading(row["Temperature_2m"])
+        self.humidity_trust_score, _, humidity_z_score = self.humidity_trust_algo.process_reading(row["Relative_Humidity_2m"])
+        self.wind_trust_score, _, wind_z_score = self.wind_trust_algo.process_reading(row["Wind_Speed_10m"])
 
         features = {
             "avgtempC": row["Temperature_2m"],
@@ -408,8 +427,12 @@ class WildfireEnv(gym.Env):
         self.episode_data["ml_result"].append(ml_result)
         self.episode_data["take_a_picture"].append(take_picture)
         self.episode_data["label"].append(row["Label"])
-        self.episode_data["trust_score"].append(self.temp_trust_score)
-        self.episode_data["z_score"].append(self.z_score)
+        self.episode_data["temp_trust_score"].append(self.temp_trust_score)
+        self.episode_data["temp_z_score"].append(temp_z_score)
+        self.episode_data["humidity_trust_score"].append(self.humidity_trust_score)
+        self.episode_data["humidity_z_score"].append(humidity_z_score)
+        self.episode_data["wind_trust_score"].append(self.wind_trust_score)
+        self.episode_data["wind_z_score"].append(wind_z_score)
 
         """ if self.battery_energy > 5:
             self.reward = - k1 * self.last_sampling_time
@@ -486,7 +509,7 @@ class WildfireEnv(gym.Env):
         # Save it to a CSV file
         df2.to_csv(f"{folder}/episode_{self.episode_counter}_{self.current_sensor}.csv", index=False)  # index=False avoids adding an extra index column
 
-        fig, axs = plt.subplots(8, 2, figsize=(15, 20), sharex=True)
+        fig, axs = plt.subplots(10, 2, figsize=(15, 28), sharex=True)
         axs = axs.flatten()
 
         axs[0].scatter(self.episode_data["timestamps"], self.episode_data["harvested_energy"], label="Harvested Energy (Wh)", color='green')
@@ -507,8 +530,16 @@ class WildfireEnv(gym.Env):
         axs[11].scatter(self.episode_data["timestamps"], self.episode_data["missed_fire_times"], label="Missed Fire Time (min)", color='green')
         
         axs[12].scatter(self.episode_data["timestamps"], self.episode_data["reward"], label=f"Step Reward {reason} {final_reward}", color='green')
-        axs[13].scatter(self.episode_data["timestamps"], self.episode_data["trust_score"], label="Temperature Trust Score", color='purple')
-        axs[14].scatter(self.episode_data["timestamps"], self.episode_data["z_score"], label="Temperature Z-Score", color='purple')
+        
+        axs[13].scatter(self.episode_data["timestamps"], self.episode_data["temp_trust_score"], label="Temperature Trust Score", color='purple')
+        axs[14].scatter(self.episode_data["timestamps"], self.episode_data["temp_z_score"], label="Temperature Z-Score", color='purple')
+        
+        axs[15].scatter(self.episode_data["timestamps"], self.episode_data["humidity_trust_score"], label="Humidity Trust Score", color='blue')
+        axs[16].scatter(self.episode_data["timestamps"], self.episode_data["humidity_z_score"], label="Humidity Z-Score", color='blue')
+
+        axs[17].scatter(self.episode_data["timestamps"], self.episode_data["wind_trust_score"], label="Wind Trust Score", color='orange')
+        axs[18].scatter(self.episode_data["timestamps"], self.episode_data["wind_z_score"], label="Wind Z-Score", color='orange')
+
         axs[-1].set_xlabel("Timestamp (min)", fontsize=16, fontweight='bold')
         
         if self.fire_start_time is not None:

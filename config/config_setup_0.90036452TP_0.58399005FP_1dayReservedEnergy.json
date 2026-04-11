@@ -37,16 +37,42 @@
         "k2": 2
     },
     "TrustFactor": {
-    "window_size": 10,
-    "ema_alpha": 0.04,
-    "min_temp_threshold": -50,
-    "max_temp_threshold": 100,
-    "penalty_out_of_bounds": 50,
-    "penalty_flatline": 30,
-    "z_score_threshold": 3,
-    "penalty_high_z_score": 10,
-    "state_threshold_healthy": 90,
-    "state_threshold_warning": 70
+        "Temperature": {
+            "window_size": 10,
+            "ema_alpha": 0.04,
+            "min_temp_threshold": -50,
+            "max_temp_threshold": 100,
+            "penalty_out_of_bounds": 50,
+            "penalty_flatline": 30,
+            "z_score_threshold": 3,
+            "penalty_high_z_score": 10,
+            "state_threshold_healthy": 90,
+            "state_threshold_warning": 70
+        },
+        "Humidity": {
+            "window_size": 10,
+            "ema_alpha": 0.04,
+            "min_humidity_threshold": 0,
+            "max_humidity_threshold": 100,
+            "penalty_out_of_bounds": 50,
+            "penalty_flatline": 30,
+            "z_score_threshold": 3,
+            "penalty_high_z_score": 10,
+            "state_threshold_healthy": 90,
+            "state_threshold_warning": 70
+        },
+        "Wind": {
+            "window_size": 30,
+            "ema_alpha": 0.04,
+            "min_wind_threshold": 0,
+            "max_wind_threshold": 60,
+            "penalty_out_of_bounds": 50,
+            "penalty_flatline": 40,
+            "z_score_threshold": 3,
+            "penalty_high_z_score": 5,
+            "state_threshold_healthy": 90,
+            "state_threshold_warning": 70
+        }
     },
     "TD3_params": {
         "gamma": 1,
