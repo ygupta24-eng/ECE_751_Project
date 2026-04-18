@@ -94,12 +94,22 @@ class Logger(object):
 
 # Define RL Environment
 class WildfireEnv(gym.Env):
-    
-    def __init__(self, df, config, start_offset=0):
+
+    def __init__(self, df, config, start_offset=0, shared_states=None):
         super(WildfireEnv, self).__init__()
-        self.df = df  # Store full dataset, select a sensor later
+        self.df = df  # This df is now for a SINGLE sensor
         self.config = config
         self.start_offset = start_offset
+
+        # Use the managed dictionary passed from the main process
+        if shared_states is not None:
+            self.sensor_shared_states = shared_states
+            # --- Change: Get all sensor IDs from the shared state ---
+            all_sensor_ids = list(shared_states.keys())
+        else:
+            # Fallback for non-parallel execution
+            self.sensor_shared_states = {sensor_id: 0 for sensor_id in df["Sensor"].unique()}
+            all_sensor_ids = df["Sensor"].unique()
 
         # Read trust factor params from config and initialize algorithms for each metric
         trust_factor_configs = self.config.get("TrustFactor", {})
@@ -112,7 +122,7 @@ class WildfireEnv(gym.Env):
         self.wind_trust_score = 100.0
 
         self.dt_model = load("weather_fire_detection_model.pkl")
-        self.sensor_selection_count = {sensor: 0 for sensor in df["Sensor"].unique()} 
+        self.sensor_selection_count = {sensor: 0 for sensor in all_sensor_ids} # Change: Initialize count for ALL sensors
         self.sensor_data = None  # Will be set in reset()
         self.current_sensor = None  # Track the current sensor
         self.current_step = 0
@@ -173,7 +183,8 @@ class WildfireEnv(gym.Env):
             "humidity_trust_score": [],
             "humidity_z_score": [],
             "wind_trust_score": [],
-            "wind_z_score": []
+            "wind_z_score": [],
+            "used_neighbor_risk": []
         }
 
         # Observation space (state)
@@ -188,8 +199,15 @@ class WildfireEnv(gym.Env):
             return None  
         self.current_sensor = sensor_override
 
+        # Identify neighbor based on the full list of sensors in the shared dict
+        all_sensors = list(self.sensor_shared_states.keys())
+        if len(all_sensors) == 2:
+            self.current_neighbor_sensor = [s for s in all_sensors if s != self.current_sensor][0]
+        else:
+            self.current_neighbor_sensor = None # No neighbor if not exactly 2 sensors
+
         # Set sensor data dynamically
-        self.sensor_data = self.df[self.df["Sensor"] == self.current_sensor].reset_index(drop=True)
+        self.sensor_data = self.df.reset_index(drop=True) # df is already filtered in main
         
         self.sensor_selection_count[self.current_sensor] += 1  # Update visit count
         
@@ -265,6 +283,7 @@ class WildfireEnv(gym.Env):
             "humidity_z_score": [],
             "wind_trust_score": [],
             "wind_z_score": [],
+            "used_neighbor_risk": []
         }
         
         return self.get_state()
@@ -277,17 +296,16 @@ class WildfireEnv(gym.Env):
             row["Temperature_2m_normalized"],
             row["Relative_Humidity_2m_normalized"],
             row["Wind_Speed_10m"],
-            # row["Rain"],
+            # row["Rain"], # This line is commented, so the shape is 11
             row["HDWI"],
             row["solar_energy"],
             normalize_feature(self.last_sampling_time, 1, self.config["TD3_params"]["max_sampling_time"]),
-            # normalize_feature(self.battery_energy, 0, self.max_battery_energy),
             normalize_feature(self.energy_budget, 0, self.max_battery_energy - self.config["Energy_Constraints"]["reserved_energy"]),
             normalize_feature(time_since_last_image, 0, 120),
             row["Time_of_Day"],
-            row["Season"],  # Encoded as a categorical variable
-            self.previous_ml_result,  # Fire detected previously (or not)
-        ], dtype=np.float32)
+            row["Season"],
+            self.previous_ml_result,
+        ], dtype=np.float32) # Total = 11 elements
 
     def step(self, action):
         self.last_sampling_time = int(action) # Weather Sensor Read Interval
@@ -311,16 +329,33 @@ class WildfireEnv(gym.Env):
         row = self.sensor_data.iloc[self.current_step]
 
         # Update trust scores for all metrics
-        self.temp_trust_score, _, temp_z_score = self.temp_trust_algo.process_reading(row["Temperature_2m"])
-        self.humidity_trust_score, _, humidity_z_score = self.humidity_trust_algo.process_reading(row["Relative_Humidity_2m"])
-        self.wind_trust_score, _, wind_z_score = self.wind_trust_algo.process_reading(row["Wind_Speed_10m"])
+        self.temp_trust_score, temp_state, temp_z_score = self.temp_trust_algo.process_reading(row["Temperature_2m"])
+        self.humidity_trust_score, humidity_state, humidity_z_score = self.humidity_trust_algo.process_reading(row["Relative_Humidity_2m"])
+        self.wind_trust_score, wind_state, wind_z_score = self.wind_trust_algo.process_reading(row["Wind_Speed_10m"])
 
-        features = {
-            "avgtempC": row["Temperature_2m"],
-            "humid": row["Relative_Humidity_2m"]
-        }
-        df_features = pd.DataFrame([features])
-        take_picture = int(self.dt_model.predict(df_features)[0])
+        unreliable_sensor_penalty = 0
+        used_neighbor_risk = 0
+
+        is_critical = temp_state == "Critical" or humidity_state == "Critical" or wind_state == "Critical"
+
+        if is_critical and self.current_neighbor_sensor:
+            # Fetch the last known value from the neighbor via the shared state
+            take_picture = self.sensor_shared_states[self.current_neighbor_sensor]
+            
+            # Apply energy penalty for communication
+            unreliable_sensor_penalty += self.config["Energy_Constraints"].get("E_unreliable_sensor", 0.05)
+            used_neighbor_risk = 1
+        else:
+            # Data is reliable, so calculate our own value
+            features = {
+                "avgtempC": row["Temperature_2m"],
+                "humid": row["Relative_Humidity_2m"]
+            }
+            df_features = pd.DataFrame([features])
+            take_picture = int(self.dt_model.predict(df_features)[0])
+            
+            # "Post" our new status to the shared state for others to see
+            self.sensor_shared_states[self.current_sensor] = take_picture
         
         # Combine skipped rows and the RL-decided row
         fire_rows = pd.concat([skipped_data, self.sensor_data.iloc[[self.current_step]]])
@@ -362,7 +397,8 @@ class WildfireEnv(gym.Env):
         # Energy management with standby power
         energy_used = (
             self.config["Energy_Constraints"]["E_proc_rl"] + self.config["Energy_Constraints"]["E_temp_humidity_sensor"] + self.config["Energy_Constraints"]["E_anemometer_sensor"] + (self.config["Energy_Constraints"]["E_proc_ml"] + self.config["Energy_Constraints"]["E_camera_host"] if take_picture else 0) +
-            standby_power_used + (self.config["Energy_Constraints"]["E_comm"] + neighbor_comm_energy if ml_result and take_picture else 0) 
+            standby_power_used + (self.config["Energy_Constraints"]["E_comm"] + neighbor_comm_energy if ml_result and take_picture else 0) +
+            unreliable_sensor_penalty
         )
         
         # Simulate minute-by-minute depletion during skipped time
@@ -433,6 +469,7 @@ class WildfireEnv(gym.Env):
         self.episode_data["humidity_z_score"].append(humidity_z_score)
         self.episode_data["wind_trust_score"].append(self.wind_trust_score)
         self.episode_data["wind_z_score"].append(wind_z_score)
+        self.episode_data["used_neighbor_risk"].append(used_neighbor_risk)
 
         """ if self.battery_energy > 5:
             self.reward = - k1 * self.last_sampling_time
@@ -539,6 +576,8 @@ class WildfireEnv(gym.Env):
 
         axs[17].scatter(self.episode_data["timestamps"], self.episode_data["wind_trust_score"], label="Wind Trust Score", color='orange')
         axs[18].scatter(self.episode_data["timestamps"], self.episode_data["wind_z_score"], label="Wind Z-Score", color='orange')
+
+        axs[19].scatter(self.episode_data["timestamps"], self.episode_data["used_neighbor_risk"], label="Used Neighbor Risk [0, 1]", color='black')
 
         axs[-1].set_xlabel("Timestamp (min)", fontsize=16, fontweight='bold')
         

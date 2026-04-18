@@ -17,7 +17,8 @@
         "E_proc_ml": 0.00031626819795303057,
         "E_proc_rl": 0.00031626819795303057,
         "E_temp_humidity_sensor": 6.66667e-08,
-        "E_anemometer_sensor": 2.11241e-05
+        "E_anemometer_sensor": 2.11241e-05,
+        "E_unreliable_sensor": 0.05
     },
     "Standby_Power_Components": {
         "P_temp_humidity_standby": 2e-06,
