@@ -23,12 +23,12 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 
-def run_inference_with_sensor_id(sensor_id, sensor_df, start_offset, config, shared_states):
+def run_inference_with_sensor_id(sensor_id, sensor_df, start_offset, config, shared_states, neighbor_map, shared_comm_debt):
 
     file_name = config["file_name"]
 
     # Recreate environment and logger
-    env = WildfireEnv(sensor_df, config, start_offset=start_offset, shared_states=shared_states)
+    env = WildfireEnv(sensor_df, config, start_offset=start_offset, shared_states=shared_states, neighbor_map=neighbor_map, shared_comm_debt=shared_comm_debt)
     model = TD3.load(
         "wildfire_td3_20250622_041653_RL1to30min_beta0p9_0.90036452TP_0.58399005FP_noOffset_7daysReservedEng_50perLoss_37571840.zip",
         env=env,
@@ -87,15 +87,42 @@ if __name__ == '__main__':
     
     # All sensors → each one becomes a parallel task
     all_sensors = sorted(df["Sensor"].unique())
+
+    # Backup Neighbor Selection Logic
+    neighbor_map = {}
+    num_sensors = len(all_sensors)
+    for i, sensor_id in enumerate(all_sensors):
+        # Edge case: First sensor in the array
+        if i == 0:
+            neighbor_map[sensor_id] = all_sensors[i + 1]
+        # Edge case: Last sensor in the array
+        elif i == num_sensors - 1:
+            neighbor_map[sensor_id] = all_sensors[i - 1]
+        # All other sensors
+        else:
+            dist_to_start = i
+            dist_to_end = (num_sensors - 1) - i
+            
+            if dist_to_start < dist_to_end:
+                # Closer to the start, neighbor is to the left
+                neighbor_map[sensor_id] = all_sensors[i - 1]
+            elif dist_to_end < dist_to_start:
+                # Closer to the end, neighbor is to the right
+                neighbor_map[sensor_id] = all_sensors[i + 1]
+            else:
+                # Equidistant (middle sensor), neighbor is to the left
+                neighbor_map[sensor_id] = all_sensors[i - 1]
+    
+    print("Generated Neighbor Map (Positional Logic):", neighbor_map)
     
     start_offset_per_sensor = {
         sensor: np.random.randint(0, max_offset_per_sensor - 1) for sensor in all_sensors
     }
-    
-    def run_batch(sensor_list, shared_states):
+
+    def run_batch(sensor_list, shared_states, shared_comm_debt):
         # Add the shared_states dictionary to the arguments for each process
         args = [
-            (sensor, df[df["Sensor"] == sensor].copy(), start_offset_per_sensor[sensor], config, shared_states)
+            (sensor, df[df["Sensor"] == sensor].copy(), start_offset_per_sensor[sensor], config, shared_states, neighbor_map, shared_comm_debt)
             for sensor in sensor_list
         ]
 
@@ -106,15 +133,19 @@ if __name__ == '__main__':
     with Manager() as manager:
         # This dictionary is the shared memory for all sensor processes
         shared_sensor_states = manager.dict()
+        # Shared dictionary for communication debt: If one sensor shares risk data with its neighbor, it incurs an energy penalty
+        shared_comm_debt = manager.dict()
+
         # Initialize the shared state for all sensors before starting
         for sensor_id in all_sensors:
             shared_sensor_states[sensor_id] = 0 # Default state: no picture
+            shared_comm_debt[sensor_id] = 0 # Default communication debt
 
         # === Batch all sensors in chunks of ... ===
         for i in range(0, len(all_sensors), batch_size):
             current_batch = all_sensors[i:i + batch_size]
             print(f"\nRunning batch {i // batch_size + 1} with {len(current_batch)} sensors...")
-            # Pass the shared dictionary into the batch runner
-            run_batch(current_batch, shared_sensor_states)
+            # Pass both shared dictionaries into the batch runner
+            run_batch(current_batch, shared_sensor_states, shared_comm_debt)
             print(f"Batch {i // batch_size + 1} complete.")
 

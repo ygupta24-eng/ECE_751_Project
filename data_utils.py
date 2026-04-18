@@ -81,7 +81,7 @@ def prepare_dataset(config):
     episode_length_days = config["episode_length_days"]
     
     # Load dataset
-    df = pd.read_csv("test_set.csv")
+    df = pd.read_csv("new_test_data.csv")
     df["Timestamp"] = (
         pd.to_datetime(df["Timestamp"], unit="s")
         .dt.tz_localize("UTC")

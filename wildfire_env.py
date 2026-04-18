@@ -95,20 +95,22 @@ class Logger(object):
 # Define RL Environment
 class WildfireEnv(gym.Env):
 
-    def __init__(self, df, config, start_offset=0, shared_states=None):
+    def __init__(self, df, config, start_offset=0, shared_states=None, neighbor_map=None, shared_comm_debt=None):
         super(WildfireEnv, self).__init__()
-        self.df = df  # This df is now for a SINGLE sensor
+        self.df = df
         self.config = config
         self.start_offset = start_offset
+        self.neighbor_map = neighbor_map
 
-        # Use the managed dictionary passed from the main process
+        # Use the managed dictionaries passed from the main process
         if shared_states is not None:
             self.sensor_shared_states = shared_states
-            # --- Change: Get all sensor IDs from the shared state ---
+            self.shared_comm_debt = shared_comm_debt # Store the debt dictionary
             all_sensor_ids = list(shared_states.keys())
         else:
             # Fallback for non-parallel execution
             self.sensor_shared_states = {sensor_id: 0 for sensor_id in df["Sensor"].unique()}
+            self.shared_comm_debt = {sensor_id: 0 for sensor_id in df["Sensor"].unique()} # Fallback debt dict
             all_sensor_ids = df["Sensor"].unique()
 
         # Read trust factor params from config and initialize algorithms for each metric
@@ -125,6 +127,7 @@ class WildfireEnv(gym.Env):
         self.sensor_selection_count = {sensor: 0 for sensor in all_sensor_ids} # Change: Initialize count for ALL sensors
         self.sensor_data = None  # Will be set in reset()
         self.current_sensor = None  # Track the current sensor
+        self.current_neighbor_sensor = None # Add this to store the neighbor for the episode
         self.current_step = 0
         self.last_image_timestamp = None
         self.last_sampling_time = None
@@ -199,12 +202,11 @@ class WildfireEnv(gym.Env):
             return None  
         self.current_sensor = sensor_override
 
-        # Identify neighbor based on the full list of sensors in the shared dict
-        all_sensors = list(self.sensor_shared_states.keys())
-        if len(all_sensors) == 2:
-            self.current_neighbor_sensor = [s for s in all_sensors if s != self.current_sensor][0]
+        # Identify neighbor to be used for backup data using neighbor_map
+        if self.neighbor_map:
+            self.current_neighbor_sensor = self.neighbor_map.get(self.current_sensor)
         else:
-            self.current_neighbor_sensor = None # No neighbor if not exactly 2 sensors
+            self.current_neighbor_sensor = None
 
         # Set sensor data dynamically
         self.sensor_data = self.df.reset_index(drop=True) # df is already filtered in main
@@ -336,15 +338,29 @@ class WildfireEnv(gym.Env):
         unreliable_sensor_penalty = 0
         used_neighbor_risk = 0
 
+        # Check for and account for communication debt from being a sender
+        sender_penalty = 0
+        debt_owed = self.shared_comm_debt.get(self.current_sensor, 0)
+        if debt_owed > 0:
+            # Calculate penalty for being a sender
+            sender_penalty = debt_owed * self.config["Energy_Constraints"].get("E_unreliable_sensor", 0.05)
+            # Reset the debt in the shared dictionary
+            self.shared_comm_debt[self.current_sensor] = 0
+
         is_critical = temp_state == "Critical" or humidity_state == "Critical" or wind_state == "Critical"
 
         if is_critical and self.current_neighbor_sensor:
             # Fetch the last known value from the neighbor via the shared state
             take_picture = self.sensor_shared_states[self.current_neighbor_sensor]
             
-            # Apply energy penalty for communication
+            # Apply energy penalty for being the receiver
             unreliable_sensor_penalty += self.config["Energy_Constraints"].get("E_unreliable_sensor", 0.05)
             used_neighbor_risk = 1
+
+            # Increment the debt for the neighbor (the sender)
+            # This is a proxy-safe operation on the managed dictionary
+            self.shared_comm_debt[self.current_neighbor_sensor] = self.shared_comm_debt.get(self.current_neighbor_sensor, 0) + 1
+
         else:
             # Data is reliable, so calculate our own value
             features = {
@@ -398,7 +414,7 @@ class WildfireEnv(gym.Env):
         energy_used = (
             self.config["Energy_Constraints"]["E_proc_rl"] + self.config["Energy_Constraints"]["E_temp_humidity_sensor"] + self.config["Energy_Constraints"]["E_anemometer_sensor"] + (self.config["Energy_Constraints"]["E_proc_ml"] + self.config["Energy_Constraints"]["E_camera_host"] if take_picture else 0) +
             standby_power_used + (self.config["Energy_Constraints"]["E_comm"] + neighbor_comm_energy if ml_result and take_picture else 0) +
-            unreliable_sensor_penalty
+            unreliable_sensor_penalty + sender_penalty # Add both receiver and sender penalties
         )
         
         # Simulate minute-by-minute depletion during skipped time
