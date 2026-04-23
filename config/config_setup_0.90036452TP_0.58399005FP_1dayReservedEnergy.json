@@ -18,7 +18,7 @@
         "E_proc_rl": 0.00031626819795303057,
         "E_temp_humidity_sensor": 6.66667e-08,
         "E_anemometer_sensor": 2.11241e-05,
-        "E_unreliable_sensor": 0.05
+        "E_comm_hop": 0.05
     },
     "Standby_Power_Components": {
         "P_temp_humidity_standby": 2e-06,
@@ -92,7 +92,9 @@
     },
     "Neighborhood_Communication": {
         "num_neighbors": 3,
-        "E_comm_neighbor": 0
+        "E_comm_neighbor": 0,
+        "comm_fail_prob": 0.1,
+        "retries_per_neighbor": 2
     },
     "harvested_energy_loss": 0.85,
     "E_battery_leakage_percentage": 2.3148148148148148e-07,

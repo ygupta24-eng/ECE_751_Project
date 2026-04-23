@@ -187,7 +187,8 @@ class WildfireEnv(gym.Env):
             "humidity_z_score": [],
             "wind_trust_score": [],
             "wind_z_score": [],
-            "used_neighbor_risk": []
+            "used_neighbor_risk": [],
+            "comm_hops": []
         }
 
         # Observation space (state)
@@ -285,7 +286,8 @@ class WildfireEnv(gym.Env):
             "humidity_z_score": [],
             "wind_trust_score": [],
             "wind_z_score": [],
-            "used_neighbor_risk": []
+            "used_neighbor_risk": [],
+            "comm_hops": []
         }
         
         return self.get_state()
@@ -337,30 +339,61 @@ class WildfireEnv(gym.Env):
 
         unreliable_sensor_penalty = 0
         used_neighbor_risk = 0
+        comm_hops = 0
 
         # Check for and account for communication debt from being a sender
         sender_penalty = 0
         debt_owed = self.shared_comm_debt.get(self.current_sensor, 0)
         if debt_owed > 0:
-            # Calculate penalty for being a sender
-            sender_penalty = debt_owed * self.config["Energy_Constraints"].get("E_unreliable_sensor", 0.05)
+            # Calculate penalty for being a sender based on square of hops
+            # The debt is stored as hops, not just a count
+            energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
+            sender_penalty = (debt_owed ** 2) * energy_per_hop
             # Reset the debt in the shared dictionary
             self.shared_comm_debt[self.current_sensor] = 0
 
         is_critical = temp_state == "Critical" or humidity_state == "Critical" or wind_state == "Critical"
 
-        if is_critical and self.current_neighbor_sensor:
-            # Fetch the last known value from the neighbor via the shared state
-            take_picture = self.sensor_shared_states[self.current_neighbor_sensor]
+        if is_critical and self.neighbor_map.get(self.current_sensor):
+            take_picture = -1 # Sentinel for failure
+            potential_neighbors = self.neighbor_map[self.current_sensor]
             
-            # Apply energy penalty for being the receiver
-            unreliable_sensor_penalty += self.config["Energy_Constraints"].get("E_unreliable_sensor", 0.05)
-            used_neighbor_risk = 1
+            comm_fail_prob = self.config["Neighborhood_Communication"].get("comm_fail_prob", 0.0)
+            retries = self.config["Neighborhood_Communication"].get("retries_per_neighbor", 2)
+            
+            for neighbor_info in potential_neighbors:
+                neighbor_id = neighbor_info['id']
+                hops = neighbor_info['hops']
+                
+                # Energy cost scales with the square of the hops (distance)
+                energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
+                request_energy_cost = (hops ** 2) * energy_per_hop
 
-            # Increment the debt for the neighbor (the sender)
-            # This is a proxy-safe operation on the managed dictionary
-            self.shared_comm_debt[self.current_neighbor_sensor] = self.shared_comm_debt.get(self.current_neighbor_sensor, 0) + 1
+                for attempt in range(retries):
+                    unreliable_sensor_penalty += request_energy_cost # Cost for each attempt
 
+                    # Simulate communication failure
+                    if np.random.random() > comm_fail_prob:
+                        # Success!
+                        take_picture = self.sensor_shared_states[neighbor_id]
+                        
+                        # The responding neighbor incurs a debt of `hops`
+                        self.shared_comm_debt[neighbor_id] = self.shared_comm_debt.get(neighbor_id, 0) + hops
+                        # print energy penalty for current sensor, and communication debt for neighbour in a single line
+                        print(f"Energy penalty for sensor {self.current_sensor}: {unreliable_sensor_penalty:.2f}, Communication debt for neighbor {neighbor_id}: {self.shared_comm_debt[neighbor_id]}")
+                        used_neighbor_risk = 1
+                        comm_hops = hops
+                        break # Exit retry loop
+                
+                if take_picture != -1:
+                    break # Exit neighbor loop, we got the data
+
+            if take_picture == -1:
+                # All neighbors failed, fall back to own (unreliable) data
+                features = {"avgtempC": row["Temperature_2m"], "humid": row["Relative_Humidity_2m"]}
+                df_features = pd.DataFrame([features])
+                take_picture = int(self.dt_model.predict(df_features)[0])
+                self.sensor_shared_states[self.current_sensor] = take_picture
         else:
             # Data is reliable, so calculate our own value
             features = {
@@ -486,6 +519,7 @@ class WildfireEnv(gym.Env):
         self.episode_data["wind_trust_score"].append(self.wind_trust_score)
         self.episode_data["wind_z_score"].append(wind_z_score)
         self.episode_data["used_neighbor_risk"].append(used_neighbor_risk)
+        self.episode_data["comm_hops"].append(comm_hops)
 
         """ if self.battery_energy > 5:
             self.reward = - k1 * self.last_sampling_time
@@ -562,7 +596,7 @@ class WildfireEnv(gym.Env):
         # Save it to a CSV file
         df2.to_csv(f"{folder}/episode_{self.episode_counter}_{self.current_sensor}.csv", index=False)  # index=False avoids adding an extra index column
 
-        fig, axs = plt.subplots(10, 2, figsize=(15, 28), sharex=True)
+        fig, axs = plt.subplots(11, 2, figsize=(15, 28), sharex=True)
         axs = axs.flatten()
 
         axs[0].scatter(self.episode_data["timestamps"], self.episode_data["harvested_energy"], label="Harvested Energy (Wh)", color='green')
@@ -594,6 +628,8 @@ class WildfireEnv(gym.Env):
         axs[18].scatter(self.episode_data["timestamps"], self.episode_data["wind_z_score"], label="Wind Z-Score", color='orange')
 
         axs[19].scatter(self.episode_data["timestamps"], self.episode_data["used_neighbor_risk"], label="Used Neighbor Risk [0, 1]", color='black')
+
+        axs[20].scatter(self.episode_data["timestamps"], self.episode_data["comm_hops"], label="Communication Hops", color='black')
 
         axs[-1].set_xlabel("Timestamp (min)", fontsize=16, fontweight='bold')
         

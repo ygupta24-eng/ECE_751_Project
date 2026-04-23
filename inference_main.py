@@ -88,32 +88,26 @@ if __name__ == '__main__':
     # All sensors → each one becomes a parallel task
     all_sensors = sorted(df["Sensor"].unique())
 
-    # Backup Neighbor Selection Logic
+    # Backup Neighbor Selection Logic with Priorities and Hops
     neighbor_map = {}
     num_sensors = len(all_sensors)
     for i, sensor_id in enumerate(all_sensors):
-        # Edge case: First sensor in the array
-        if i == 0:
-            neighbor_map[sensor_id] = all_sensors[i + 1]
-        # Edge case: Last sensor in the array
-        elif i == num_sensors - 1:
-            neighbor_map[sensor_id] = all_sensors[i - 1]
-        # All other sensors
-        else:
-            dist_to_start = i
-            dist_to_end = (num_sensors - 1) - i
-            
-            if dist_to_start < dist_to_end:
-                # Closer to the start, neighbor is to the left
-                neighbor_map[sensor_id] = all_sensors[i - 1]
-            elif dist_to_end < dist_to_start:
-                # Closer to the end, neighbor is to the right
-                neighbor_map[sensor_id] = all_sensors[i + 1]
-            else:
-                # Equidistant (middle sensor), neighbor is to the left
-                neighbor_map[sensor_id] = all_sensors[i - 1]
-    
-    print("Generated Neighbor Map (Positional Logic):", neighbor_map)
+        # Create a list of all other sensors with their hop distance
+        potential_neighbors = []
+        for j, other_sensor_id in enumerate(all_sensors):
+            if i == j:
+                continue
+            potential_neighbors.append({
+                'id': other_sensor_id,
+                'hops': abs(i - j)
+            })
+        
+        # Sort neighbors by hop count to establish priority
+        potential_neighbors.sort(key=lambda x: x['hops'])
+        
+        neighbor_map[sensor_id] = potential_neighbors
+
+    print("Generated Neighbor Map (Prioritized Logic):", json.dumps(neighbor_map, indent=2))
     
     start_offset_per_sensor = {
         sensor: np.random.randint(0, max_offset_per_sensor - 1) for sensor in all_sensors
