@@ -343,20 +343,18 @@ class WildfireEnv(gym.Env):
         comm_hops = 0
 
         # Check for and account for communication debt from being a sender
-        sender_penalty = 0
+        sender_penalty = 0.0
         if self.shared_lock is not None:
             with self.shared_lock:
-                debt_owed = self.shared_comm_debt.get(self.current_sensor, 0)
+                debt_owed = self.shared_comm_debt.get(self.current_sensor, 0.0)  # now "energy", not hops
                 if debt_owed > 0:
-                    energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
-                    sender_penalty = (debt_owed ** 2) * energy_per_hop
-                    self.shared_comm_debt[self.current_sensor] = 0
+                    sender_penalty = float(debt_owed)
+                    self.shared_comm_debt[self.current_sensor] = 0.0
         else:
-            debt_owed = self.shared_comm_debt.get(self.current_sensor, 0)
+            debt_owed = self.shared_comm_debt.get(self.current_sensor, 0.0)
             if debt_owed > 0:
-                energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
-                sender_penalty = (debt_owed ** 2) * energy_per_hop
-                self.shared_comm_debt[self.current_sensor] = 0
+                sender_penalty = float(debt_owed)
+                self.shared_comm_debt[self.current_sensor] = 0.0
 
         is_critical = temp_state == "Critical" or humidity_state == "Critical" or wind_state == "Critical"
 
@@ -383,25 +381,28 @@ class WildfireEnv(gym.Env):
                         # Success!
                         take_picture = self.sensor_shared_states[neighbor_id]
 
-                        # The responding neighbor incurs a debt of `hops`
+                        # Sender debt should accrue in ENERGY, not hops
+                        energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
+                        sender_msg_cost = (hops ** 2) * energy_per_hop  # quadratic with distance
+
                         if self.shared_lock is not None:
                             with self.shared_lock:
-                                # overwrite debt with hop distance (NOT cumulative)
-                                self.shared_comm_debt[neighbor_id] = hops
+                                prev = self.shared_comm_debt.get(neighbor_id, 0.0)
+                                self.shared_comm_debt[neighbor_id] = prev + sender_msg_cost
                                 neighbor_debt_now = self.shared_comm_debt[neighbor_id]
                         else:
-                            self.shared_comm_debt[neighbor_id] = hops
+                            prev = self.shared_comm_debt.get(neighbor_id, 0.0)
+                            self.shared_comm_debt[neighbor_id] = prev + sender_msg_cost
                             neighbor_debt_now = self.shared_comm_debt[neighbor_id]
 
-                        # print using the captured value (no extra shared dict read)
                         print(
                             f"Energy penalty for sensor {self.current_sensor}: {unreliable_sensor_penalty:.2f}, "
-                            f"Communication debt for neighbor {neighbor_id}: {neighbor_debt_now}"
+                            f"Sender energy debt for neighbor {neighbor_id}: {neighbor_debt_now:.4f} (+{sender_msg_cost:.4f})"
                         )
 
                         used_neighbor_risk = 1
                         comm_hops = hops
-                        break  # Exit retry loop
+                        break
                 
                 if take_picture != -1:
                     break # Exit neighbor loop, we got the data
