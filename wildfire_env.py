@@ -474,14 +474,19 @@ class WildfireEnv(gym.Env):
             current_batt = self.battery_energy
             max_batt_energy = self.max_battery_energy
             E_used = (
-                self.config["Energy_Constraints"]["E_proc_rl"] + self.config["Energy_Constraints"]["E_temp_humidity_sensor"] + self.config["Energy_Constraints"]["E_anemometer_sensor"] + (self.config["Energy_Constraints"]["E_proc_ml"] + self.config["Energy_Constraints"]["E_camera_host"] if take_picture else 0) +
-                (self.config["Energy_Constraints"]["E_comm"] + neighbor_comm_energy if ml_result and take_picture else 0)
+                self.config["Energy_Constraints"]["E_proc_rl"]
+                + self.config["Energy_Constraints"]["E_temp_humidity_sensor"]
+                + self.config["Energy_Constraints"]["E_anemometer_sensor"]
+                + (self.config["Energy_Constraints"]["E_proc_ml"] + self.config["Energy_Constraints"]["E_camera_host"] if take_picture else 0)
+                + (self.config["Energy_Constraints"]["E_comm"] + neighbor_comm_energy if ml_result and take_picture else 0)
+                # NEW: include comm penalties as instantaneous at this step timestamp
+                + float(unreliable_sensor_penalty)
+                + float(sender_penalty)
             )
             for i, ts in enumerate(fire_rows["Timestamp"]):
                 harvested = fire_rows.iloc[i]["solar_energy"] * self.config["harvested_energy_loss"]
-                standby_used = standby_power_used / len(fire_rows) # Distribute standby cost equally
-                net_energy = harvested - standby_used 
-                # No sensing/ML/comm costs since device is idle, just standby and harvested
+                standby_used = standby_power_used / len(fire_rows)  # Distribute standby cost equally
+                net_energy = harvested - standby_used
 
                 current_batt += net_energy
                 current_batt *= (1 - self.config["E_battery_leakage_percentage"])
@@ -491,8 +496,11 @@ class WildfireEnv(gym.Env):
                 if current_batt - self.config["Energy_Constraints"]["reserved_energy"] <= 0:
                     self.battery_depletion_time = ts
                     break  # First time battery hits 0
-                
-            if  current_batt - self.config["Energy_Constraints"]["reserved_energy"] > 0 and current_batt - E_used - self.config["Energy_Constraints"]["reserved_energy"] <= 0:
+
+            if (
+                current_batt - self.config["Energy_Constraints"]["reserved_energy"] > 0
+                and current_batt - E_used - self.config["Energy_Constraints"]["reserved_energy"] <= 0
+            ):
                 self.battery_depletion_time = row["Timestamp"]
             
         # Update battery energy first
