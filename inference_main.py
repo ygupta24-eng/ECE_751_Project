@@ -23,12 +23,12 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 
-def run_inference_with_sensor_id(sensor_id, sensor_df, start_offset, config, shared_states, neighbor_map, shared_comm_debt):
+def run_inference_with_sensor_id(sensor_id, sensor_df, start_offset, config, shared_states, neighbor_map, shared_comm_debt, shared_lock):
 
     file_name = config["file_name"]
 
     # Recreate environment and logger
-    env = WildfireEnv(sensor_df, config, start_offset=start_offset, shared_states=shared_states, neighbor_map=neighbor_map, shared_comm_debt=shared_comm_debt)
+    env = WildfireEnv(sensor_df, config, start_offset=start_offset, shared_states=shared_states, neighbor_map=neighbor_map, shared_comm_debt=shared_comm_debt, shared_lock=shared_lock)
     model = TD3.load(
         "wildfire_td3_20250622_041653_RL1to30min_beta0p9_0.90036452TP_0.58399005FP_noOffset_7daysReservedEng_50perLoss_37571840.zip",
         env=env,
@@ -113,13 +113,11 @@ if __name__ == '__main__':
         sensor: np.random.randint(0, max_offset_per_sensor - 1) for sensor in all_sensors
     }
 
-    def run_batch(sensor_list, shared_states, shared_comm_debt):
-        # Add the shared_states dictionary to the arguments for each process
+    def run_batch(sensor_list, shared_states, shared_comm_debt, shared_lock):
         args = [
-            (sensor, df[df["Sensor"] == sensor].copy(), start_offset_per_sensor[sensor], config, shared_states, neighbor_map, shared_comm_debt)
+            (sensor, df[df["Sensor"] == sensor].copy(), start_offset_per_sensor[sensor], config, shared_states, neighbor_map, shared_comm_debt, shared_lock)
             for sensor in sensor_list
         ]
-
         with Pool(processes=len(sensor_list)) as pool:
             pool.starmap(run_inference_with_sensor_id, args)
 
@@ -129,6 +127,7 @@ if __name__ == '__main__':
         shared_sensor_states = manager.dict()
         # Shared dictionary for communication debt: If one sensor shares risk data with its neighbor, it incurs an energy penalty
         shared_comm_debt = manager.dict()
+        shared_lock = manager.Lock()
 
         # Initialize the shared state for all sensors before starting
         for sensor_id in all_sensors:
@@ -140,6 +139,6 @@ if __name__ == '__main__':
             current_batch = all_sensors[i:i + batch_size]
             print(f"\nRunning batch {i // batch_size + 1} with {len(current_batch)} sensors...")
             # Pass both shared dictionaries into the batch runner
-            run_batch(current_batch, shared_sensor_states, shared_comm_debt)
+            run_batch(current_batch, shared_sensor_states, shared_comm_debt, shared_lock)
             print(f"Batch {i // batch_size + 1} complete.")
 
