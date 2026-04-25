@@ -213,12 +213,12 @@ if __name__ == '__main__':
         print(f"  Total picture attempts       : {total_attempts}")
         print(f"  Total CAMERA_OK              : {total_ok}")
         print(f"  Total FAULT_WARNING          : {total_warning}  "
-              f"← picture taken, ml_result zeroed")
+            f"(picture taken, ml_result zeroed)")
         print(f"  Total FAULT_CRITICAL         : {total_critical}  "
-              f"← picture taken, ml_result zeroed")
+            f"(picture taken, ml_result zeroed)")
         print(f"  Total SHUT_CAMERA            : {total_shut}  "
-              f"← picture suppressed")
+            f"(picture suppressed)")
         print(f"  Total degraded-image steps   : {total_degraded}  "
               f"(WARNING + CRITICAL combined)")
-        print(f"  Fleet summary saved          → {summary_csv_path}")
+        print(f"  Fleet summary saved          : {summary_csv_path}")
         print(f"{'='*60}\n")

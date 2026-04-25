@@ -1,0 +1,12 @@
+{
+    "Camera_SelfCheck": {
+        "enabled": true,
+        "consecutive_fault_threshold": 3,
+        "blur_laplacian_threshold": 256.13,
+        "noise_laplacian_threshold": 8915.43,
+        "exposure_pixel_ratio": 0.15,
+        "over_exposure_threshold": 245,
+        "under_exposure_threshold": 10,
+        "pov_correlation_threshold": 0.59
+    }
+}

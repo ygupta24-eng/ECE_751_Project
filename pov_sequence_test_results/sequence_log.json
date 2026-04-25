@@ -1,0 +1,258 @@
+[
+  {
+    "position": 0,
+    "name": "002.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9996980279993973,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 1,
+    "name": "003.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9988613402037746,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 2,
+    "name": "004.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9978754059656906,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 3,
+    "name": "005.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9396698592772226,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 4,
+    "name": "006.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9455910459607156,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 5,
+    "name": "007.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9512891817330864,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 6,
+    "name": "008.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9569113482750535,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 7,
+    "name": "009.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9602474322923774,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 8,
+    "name": "010.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9627270250710436,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 9,
+    "name": "011.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "CAMERA_OK",
+    "score": 0.9678206008206844,
+    "faults": [],
+    "cons": 0
+  },
+  {
+    "position": 10,
+    "name": "img_1.jpg",
+    "is_injected": true,
+    "expected": "pov_fault",
+    "signal": "FAULT_WARNING",
+    "score": -0.06660522224681968,
+    "faults": [
+      "POV_CHANGE(score=-0.067)"
+    ],
+    "cons": 1
+  },
+  {
+    "position": 11,
+    "name": "img_2.jpg",
+    "is_injected": true,
+    "expected": "pov_fault",
+    "signal": "FAULT_CRITICAL",
+    "score": -0.09150343440133483,
+    "faults": [
+      "POV_CHANGE(score=-0.092)"
+    ],
+    "cons": 2
+  },
+  {
+    "position": 12,
+    "name": "img_3.jpg",
+    "is_injected": true,
+    "expected": "pov_fault",
+    "signal": "SHUT_CAMERA",
+    "score": 0.16106102060067065,
+    "faults": [
+      "POV_CHANGE(score=0.161)"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 13,
+    "name": "012.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 14,
+    "name": "013.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 15,
+    "name": "014.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 16,
+    "name": "015.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 17,
+    "name": "016.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 18,
+    "name": "017.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 19,
+    "name": "018.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 20,
+    "name": "019.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 21,
+    "name": "020.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  },
+  {
+    "position": 22,
+    "name": "021.jpg",
+    "is_injected": false,
+    "expected": "good",
+    "signal": "SHUT_CAMERA",
+    "score": null,
+    "faults": [
+      "CAMERA_OFFLINE"
+    ],
+    "cons": 3
+  }
+]

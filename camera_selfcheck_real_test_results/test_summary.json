@@ -1,0 +1,24 @@
+{
+    "timestamp": "2026-04-18 13:45:17",
+    "total_frames": 152,
+    "good_frames": 97,
+    "fault_frames": 55,
+    "accuracy_pct": 95.39,
+    "good_detection_pct": 100.0,
+    "fault_detection_pct": 87.27,
+    "false_positives": 0,
+    "false_negatives": 7,
+    "fault_type_counts": {
+        "OVEREXPOSED": 7,
+        "POV_CHANGE": 6,
+        "BLUR": 13,
+        "NOISE": 23,
+        "UNDEREXPOSED": 5
+    },
+    "signal_counts": {
+        "CAMERA_OK": 104,
+        "FAULT_WARNING": 38,
+        "FAULT_CRITICAL": 9,
+        "SHUT_CAMERA": 1
+    }
+}

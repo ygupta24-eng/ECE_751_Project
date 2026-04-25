@@ -242,32 +242,6 @@ assert_test(
     f"faults={faults}"
 )
 
-# Test 14: Frozen Frame — identical consecutive frames
-check.reset()
-frame_a = make_frame(brightness=120, noise_level=0)
-frame_b = frame_a.copy()
-check.check(frame_a, step=0)    # sets prev_frame
-signal, faults, image_ok = check.check(frame_b, step=1)
-assert_test(
-    any("FROZEN_FRAME" in f for f in faults),
-    "Test 14 — FROZEN_FRAME detected on identical consecutive frames",
-    f"faults={faults}"
-)
-
-# Test 15: Frozen Frame NOT triggered on clearly different frames
-# Use inverted checkerboard (tile offset by half a tile) so pixel diff is large
-check.reset()
-frame_c = make_frame(brightness=120, noise_level=0)
-# Inverted: swap hi/lo values → every block flips → large mean pixel diff
-frame_d = make_frame(brightness=40, noise_level=0)   # very different brightness
-check.check(frame_c, step=0)
-signal, faults, image_ok = check.check(frame_d, step=1)
-assert_test(
-    not any("FROZEN_FRAME" in f for f in faults),
-    "Test 15 — FROZEN_FRAME not triggered on clearly different frames",
-    f"faults={faults}"
-)
-
 # Test 16: POV Change — completely different scene from reference
 check.reset()
 reference             = make_frame(brightness=120)

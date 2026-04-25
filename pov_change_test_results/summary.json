@@ -1,0 +1,22 @@
+{
+    "threshold": 0.78,
+    "target_size": [
+        1280,
+        960
+    ],
+    "good_images_tested": 71,
+    "false_positives": 0,
+    "pov_images_tested": 47,
+    "pov_detected": true,
+    "pov_missed": 0,
+    "detection_rate_pct": 100.0,
+    "false_positive_pct": 0.0,
+    "good_score_min": 0.9214,
+    "good_score_max": 1.0,
+    "good_score_mean": 0.976,
+    "pov_score_min": -0.1306,
+    "pov_score_max": 0.759,
+    "pov_score_mean": 0.6009,
+    "missed_images": [],
+    "false_positive_images": []
+}

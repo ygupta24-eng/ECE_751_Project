@@ -57,17 +57,17 @@
         "E_comm_neighbor": 0
     },
     "Camera_SelfCheck": {
-        "enabled": true,
-        "consecutive_fault_threshold": 3,
-        "black_brightness_threshold": 10,
-        "blur_laplacian_threshold": 100.0,
-        "noise_laplacian_threshold": 3000.0,
-        "exposure_pixel_ratio": 0.15,
-        "over_exposure_threshold": 245,
-        "under_exposure_threshold": 10,
-        "frozen_diff_threshold": 5.0,
-        "pov_correlation_threshold": 0.4
-    },
+    "enabled": false,
+    "image_dataset_dir": "F:/Wildfire_Camera/Dataset_images/Mixed_images",
+    "consecutive_fault_threshold": 3,
+    "blur_laplacian_threshold": 100.0,
+    "noise_laplacian_threshold": 3000.0,
+    "over_exposure_pixel_ratio": 0.10,
+    "under_exposure_pixel_ratio": 0.02,
+    "over_exposure_threshold": 245,
+    "under_exposure_threshold": 25,
+    "pov_correlation_threshold": 0.4
+},
     "harvested_energy_loss": 0.85,
     "E_battery_leakage_percentage": 2.3148148148148148e-07,
     "max_offset_per_sensor": 60,

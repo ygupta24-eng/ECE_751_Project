@@ -1,4 +1,4 @@
- """
+"""
 Stage 2 — WildfireEnv Camera Wiring Tests
 ==========================================
 Tests that take_picture, ml_result, energy, and episode_data are all wired

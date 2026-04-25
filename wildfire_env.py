@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from gymnasium import spaces
 from joblib import load
+from pathlib import Path
 
 from data_utils import normalize_feature
 
@@ -32,65 +33,45 @@ class CameraSelfCheck:
     """
     Detects 6 camera fault conditions and escalates through a signal state machine.
 
-    State machine (mirrors notebook CONSECUTIVE_THRESH logic):
+    State machine:
     ┌──────────────────┬───────────────────────────────────────────────────────┐
     │ Signal           │ Behaviour in WildfireEnv.step()                       │
     ├──────────────────┼───────────────────────────────────────────────────────┤
     │ CAMERA_OK        │ take_picture=1, ML runs normally                      │
-    │ FAULT_WARNING    │ take_picture=1 (picture attempted), but image is      │
-    │                  │ flagged as faulty → ml_result forced to 0             │
-    │ FAULT_CRITICAL   │ take_picture=1 (picture attempted), but image is      │
-    │                  │ flagged as faulty → ml_result forced to 0             │
-    │ SHUT_CAMERA      │ take_picture=0 (camera fully suppressed),             │
-    │                  │ no energy for camera/ML, locked for rest of episode   │
+    │ FAULT_WARNING    │ take_picture=1, image faulty → ml_result forced to 0  │
+    │ FAULT_CRITICAL   │ take_picture=1, image faulty → ml_result forced to 0  │
+    │ SHUT_CAMERA      │ take_picture=0, camera suppressed for rest of episode  │
     └──────────────────┴───────────────────────────────────────────────────────┘
-
-    Key distinction from previous version:
-      - WARNING / CRITICAL do NOT suppress take_picture.
-        The camera still fires — but the image quality is too poor for
-        reliable fire detection, so ml_result is zeroed out.
-      - Only SHUT_CAMERA suppresses take_picture entirely.
-
-    Fault detectors:
-      1. Black Frame        — mean brightness below threshold
-      2. Blur               — Laplacian variance below threshold
-      3. Noise              — Laplacian variance above threshold
-      4. Overexposure /
-         Underexposure      — saturated/dark pixel ratio above threshold
-      5. Frozen Frame       — mean pixel diff vs previous frame below threshold
-      6. POV Change         — HSV histogram correlation vs reference below threshold
     """
+
+    # Standard resolution — all frames resized to this before any check
+    # Handles mixed camera types / resolutions in the dataset
+    TARGET_SIZE = (1280, 960)
 
     def __init__(self, config):
         cfg = config["Camera_SelfCheck"]
 
-        # All thresholds driven from config — no magic numbers in code
         self.enabled            = cfg["enabled"]
         self.consecutive_limit  = cfg["consecutive_fault_threshold"]
-        self.black_thresh       = cfg["black_brightness_threshold"]
         self.blur_thresh        = cfg["blur_laplacian_threshold"]
         self.noise_thresh       = cfg["noise_laplacian_threshold"]
-        self.exposure_ratio     = cfg["exposure_pixel_ratio"]
+        self.over_exp_ratio    = cfg.get("over_exposure_pixel_ratio",  0.10)
+        self.under_exp_ratio   = cfg.get("under_exposure_pixel_ratio", 0.02)
         self.over_exp_thresh    = cfg["over_exposure_threshold"]
         self.under_exp_thresh   = cfg["under_exposure_threshold"]
-        self.frozen_diff_thresh = cfg["frozen_diff_threshold"]
         self.pov_corr_thresh    = cfg["pov_correlation_threshold"]
 
-        # Runtime state
-        self.prev_frame         = None
         self.reference_frame    = None
         self.consecutive_faults = 0
         self.is_shutdown        = False
         self.signal             = "CAMERA_OK"
-        self.fault_log          = []   # list of (step, signal, [faults])
+        self.fault_log          = []
 
     def reset(self):
         """
-        Called at the start of every episode in WildfireEnv.reset().
-        Clears per-episode state but keeps reference_frame — the physical
-        camera does not change between episodes.
+        Called at the start of every episode.
+        Clears per-episode state but keeps reference_frame.
         """
-        self.prev_frame         = None
         self.consecutive_faults = 0
         self.is_shutdown        = False
         self.signal             = "CAMERA_OK"
@@ -98,77 +79,52 @@ class CameraSelfCheck:
 
     def check(self, frame: np.ndarray, step: int):
         """
-        Run all fault detectors and update the signal state machine.
-
-        Called from WildfireEnv.step() every time take_picture_attempted == 1.
-
-        Args:
-            frame : BGR numpy array (real captured image or synthesized frame)
-            step  : current env step index — stored in fault_log for traceability
+        Run all fault detectors on a frame.
 
         Returns:
-            signal      str   "CAMERA_OK" | "FAULT_WARNING" |
-                              "FAULT_CRITICAL" | "SHUT_CAMERA"
-            faults      list  names of all faults detected this frame
-            image_ok    bool  True only when signal == "CAMERA_OK"
-                              (False means image quality is too poor for ML —
-                               but does NOT mean take_picture is suppressed,
-                               unless signal == "SHUT_CAMERA")
+            signal    str   "CAMERA_OK" | "FAULT_WARNING" |
+                            "FAULT_CRITICAL" | "SHUT_CAMERA"
+            faults    list  names of faults detected
+            image_ok  bool  True only when signal == "CAMERA_OK"
         """
         if not self.enabled:
             return "CAMERA_OK", [], True
 
-        # Once shutdown, camera stays offline for the rest of the episode
         if self.is_shutdown:
             return "SHUT_CAMERA", ["CAMERA_OFFLINE"], False
+
+        # Normalize resolution — handles mixed camera types
+        frame = cv2.resize(frame, self.TARGET_SIZE)
 
         faults = []
         gray   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # ── Fault 1: Black Frame ──────────────────────────────────────────────
-        mean_brightness = np.mean(gray)
-        if mean_brightness < self.black_thresh:
-            faults.append(f"BLACK_FRAME(brightness={mean_brightness:.1f})")
-
-        # ── Fault 2 & 3: Blur / Noise (same metric, mutually exclusive) ───────
+        # Fault 2 & 3: Blur / Noise
         lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         if lap_var < self.blur_thresh:
             faults.append(f"BLUR(lap={lap_var:.1f})")
         elif lap_var > self.noise_thresh:
             faults.append(f"NOISE(lap={lap_var:.1f})")
 
-        # ── Fault 4: Exposure ─────────────────────────────────────────────────
+        # Fault 4: Exposure
         total_pixels = gray.size
         over_ratio   = np.sum(gray > self.over_exp_thresh)  / total_pixels
         under_ratio  = np.sum(gray < self.under_exp_thresh) / total_pixels
-        if over_ratio > self.exposure_ratio:
+        if over_ratio > self.over_exp_ratio:
             faults.append(f"OVEREXPOSED(ratio={over_ratio:.2f})")
-        elif under_ratio > self.exposure_ratio:
+        elif under_ratio > self.under_exp_ratio:
             faults.append(f"UNDEREXPOSED(ratio={under_ratio:.2f})")
 
-        # ── Fault 5: Frozen Frame ─────────────────────────────────────────────
-        if self.prev_frame is not None:
-            prev_gray = cv2.cvtColor(
-                self.prev_frame, cv2.COLOR_BGR2GRAY
-            ).astype(np.float32)
-            diff = np.mean(np.abs(gray.astype(np.float32) - prev_gray))
-            if diff < self.frozen_diff_thresh:
-                faults.append(f"FROZEN_FRAME(diff={diff:.2f})")
-
-        # ── Fault 6: POV Change ───────────────────────────────────────────────
+        # Fault 5: POV Change
         if self.reference_frame is not None:
             pov_score = self._hsv_correlation(frame, self.reference_frame)
             if pov_score < self.pov_corr_thresh:
                 faults.append(f"POV_CHANGE(score={pov_score:.2f})")
 
-        # Always update prev_frame for next frozen-frame check
-        self.prev_frame = frame.copy()
-
-        # ── Signal state machine (mirrors notebook CONSECUTIVE_THRESH logic) ──
+        # Signal state machine
         if faults:
             self.consecutive_faults += 1
             if self.consecutive_faults >= self.consecutive_limit:
-                # 3+ consecutive faults → camera is hardware-failed, shut down
                 self.signal      = "SHUT_CAMERA"
                 self.is_shutdown = True
             elif self.consecutive_faults >= 2:
@@ -176,26 +132,18 @@ class CameraSelfCheck:
             else:
                 self.signal = "FAULT_WARNING"
         else:
-            # Fault cleared → reset consecutive counter
             self.consecutive_faults = 0
             self.signal             = "CAMERA_OK"
 
         self.fault_log.append((step, self.signal, faults))
 
-        # image_ok is True only on CAMERA_OK — used by step() to decide
-        # whether to trust the ML result from this frame
         image_ok = (self.signal == "CAMERA_OK")
         return self.signal, faults, image_ok
 
     def set_reference(self, frame: np.ndarray):
-        """Store a clean reference frame for POV-change detection."""
-        self.reference_frame = frame.copy()
+        self.reference_frame = cv2.resize(frame, self.TARGET_SIZE).copy()
 
     def _hsv_correlation(self, f1: np.ndarray, f2: np.ndarray) -> float:
-        """
-        Average Pearson correlation of HSV histograms across all 3 channels.
-        Returns value in [0, 1]. Score below pov_corr_thresh = scene changed.
-        """
         score = 0.0
         hsv1  = cv2.cvtColor(f1, cv2.COLOR_BGR2HSV)
         hsv2  = cv2.cvtColor(f2, cv2.COLOR_BGR2HSV)
@@ -207,6 +155,82 @@ class CameraSelfCheck:
             score += cv2.compareHist(h1, h2, cv2.HISTCMP_CORREL)
         return score / 3.0
 
+
+# ─── Image Dataset Loader ─────────────────────────────────────────────────────
+class ImageDatasetLoader:
+    """
+    Loads real camera images from the Mixed_images dataset to feed into
+    CameraSelfCheck during inference.
+
+    Matching strategy:
+      Given a sensor timestamp, find the closest image in the dataset
+      by filename timestamp. Falls back to a random good image if no
+      close match is found.
+
+    In production (real deployed sensor):
+      Replace this class with a direct camera capture call.
+    """
+
+    def __init__(self, dataset_dir: str, fault_injection_rate: float = 0.20):
+        self.dataset_dir = dataset_dir
+        self.fault_injection_rate = fault_injection_rate
+        self.good_paths  = []
+        self.fault_paths = []
+        self._load_paths()
+
+    def _load_paths(self):
+        good_dir  = os.path.join(self.dataset_dir, "good")
+        fault_dir = os.path.join(self.dataset_dir, "fault")
+
+        if os.path.exists(good_dir):
+            self.good_paths = [
+                str(p) for p in Path(good_dir).glob("*.jpg")
+            ]
+        if os.path.exists(fault_dir):
+            self.fault_paths = [
+                str(p) for p in Path(fault_dir).glob("*.jpg")
+            ]
+
+        total = len(self.good_paths) + len(self.fault_paths)
+        self.all_paths = self.good_paths + self.fault_paths
+
+        print(
+            f"[ImageLoader] Loaded {len(self.good_paths)} good + "
+            f"{len(self.fault_paths)} fault = {total} total images "
+            f"from {self.dataset_dir}"
+        )
+
+    def get_frame(self, timestamp=None, label=None):
+        """
+        Returns a BGR frame for the current step.
+        
+        Fault injection is independent of fire label — camera hardware
+        degrades regardless of whether a fire is occurring.
+        
+        FAULT_INJECTION_RATE fraction of all picture attempts receive
+        a fault image. The rest receive good images.
+        Uses timestamp as seed for reproducibility across runs.
+        """
+        FAULT_INJECTION_RATE = self.fault_injection_rate  # from config, default 0.20
+
+        if self.fault_paths:
+            seed = int(timestamp.timestamp()) if timestamp is not None \
+                else np.random.randint(0, 10000)
+            rng  = np.random.RandomState(seed % (2**31))
+            if rng.random() < FAULT_INJECTION_RATE:
+                idx   = seed % len(self.fault_paths)
+                frame = cv2.imread(self.fault_paths[idx])
+                if frame is not None:
+                    return frame
+
+        # Serve good image
+        pool = self.good_paths or self.all_paths
+        if not pool:
+            return None
+        idx   = int(timestamp.timestamp()) % len(pool) \
+                if timestamp is not None else np.random.randint(0, len(pool))
+        frame = cv2.imread(pool[idx])
+        return frame
 
 # ─── RL Environment ───────────────────────────────────────────────────────────
 class WildfireEnv(gym.Env):
@@ -256,10 +280,35 @@ class WildfireEnv(gym.Env):
         self.fire_detection_time    = None
         self.battery_depletion_time = None
 
-        # ── Camera Self-Check instance ────────────────────────────────────────
+        # ── Camera Self-Check ─────────────────────────────────────────────────
         self.camera_check = CameraSelfCheck(config)
 
-        # Episode data — includes two new camera health columns
+        # ── Image Dataset Loader ──────────────────────────────────────────────
+        # Loads real images from dataset if path is provided in config.
+        # Falls back to synthesized frames if path is missing or invalid.
+        image_dir = config.get("Camera_SelfCheck", {}).get("image_dataset_dir", "")
+        if image_dir and os.path.exists(image_dir):
+            fault_rate = config.get("Camera_SelfCheck", {}).get("fault_injection_rate", 0.20)
+            self.image_loader = ImageDatasetLoader(image_dir, fault_injection_rate=fault_rate)
+            # Set reference frame from first good image for POV detection
+            if self.image_loader.good_paths:
+                ref = cv2.imread(self.image_loader.good_paths[0])
+                if ref is not None:
+                    self.camera_check.set_reference(ref)
+                    print(f"[CameraCheck] Reference frame set from dataset.")
+        else:
+            self.image_loader = None
+            if image_dir:
+                print(
+                    f"[CameraCheck] WARNING: image_dataset_dir '{image_dir}' "
+                    f"not found. Falling back to synthesized frames."
+                )
+            else:
+                print(
+                    f"[CameraCheck] image_dataset_dir not set in config. "
+                    f"Using synthesized frames."
+                )
+
         self.episode_data = {
             "timestamps":        [],
             "battery_levels":    [],
@@ -276,8 +325,8 @@ class WildfireEnv(gym.Env):
             "take_a_picture":    [],
             "label":             [],
             "reward":            [],
-            "camera_signal":     [],   # NEW
-            "camera_faults":     [],   # NEW
+            "camera_signal":     [],
+            "camera_faults":     [],
         }
 
         self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32)
@@ -335,8 +384,14 @@ class WildfireEnv(gym.Env):
         self.fire_detection_time    = None
         self.battery_depletion_time = None
 
-        # ── Reset camera self-check state for new episode ─────────────────────
+        # Reset camera self-check for new episode
         self.camera_check.reset()
+
+        # Re-set reference frame for new episode if loader is available
+        if self.image_loader and self.image_loader.good_paths:
+            ref = cv2.imread(self.image_loader.good_paths[0])
+            if ref is not None:
+                self.camera_check.set_reference(ref)
 
         self.episode_data = {
             "timestamps":        [],
@@ -354,8 +409,8 @@ class WildfireEnv(gym.Env):
             "take_a_picture":    [],
             "label":             [],
             "reward":            [],
-            "camera_signal":     [],   # NEW
-            "camera_faults":     [],   # NEW
+            "camera_signal":     [],
+            "camera_faults":     [],
         }
 
         return self.get_state()
@@ -388,25 +443,37 @@ class WildfireEnv(gym.Env):
         ], dtype=np.float32)
 
     # ─────────────────────────────────────────────────────────────────────────
-    def _synthesize_frame(self, row) -> np.ndarray:
+    def _get_frame(self, row) -> np.ndarray:
         """
-        Builds a synthetic BGR frame from sensor readings for simulation mode.
+        Returns a BGR frame for the current step.
+
+        Priority:
+          1. Real image from ImageDatasetLoader (if configured and available)
+          2. Synthesized frame from sensor data (fallback)
 
         ── PRODUCTION NOTE ──────────────────────────────────────────────────
-        Replace this method body with your real image capture call, e.g.:
+        In a real deployed sensor node, replace this entire method with:
             return capture_image_from_camera()
-        Everything else in step() stays identical.
         ─────────────────────────────────────────────────────────────────────
+        """
+        if self.image_loader is not None:
+            frame = self.image_loader.get_frame(
+                timestamp=row["Timestamp"],
+                label=int(row["Label"])
+            )
+            if frame is not None:
+                return frame
+            # Frame load failed — fall through to synthesized
 
-        Encoding:
-          Base brightness  ← normalized temperature
-          Blue channel     ← time-of-day offset  (avoids greyscale flatness)
-          Red channel      ← HDWI fire-risk offset
-          Small random noise ensures frozen-frame detector does not
-          false-positive on consecutive identical sensor readings.
+        return self._synthesize_frame(row)
+
+    def _synthesize_frame(self, row) -> np.ndarray:
+        """
+        Fallback: builds a synthetic BGR frame from sensor readings.
+        Used when no image dataset is configured or image load fails.
         """
         brightness = int(np.clip(row["Temperature_2m_normalized"] * 200 + 30, 0, 255))
-        frame      = np.full((480, 640, 3), brightness, dtype=np.uint8)
+        frame      = np.full((960, 1280, 3), brightness, dtype=np.uint8)
         frame[:, :, 0] = np.clip(brightness + int(row["Time_of_Day"] * 20), 0, 255)
         frame[:, :, 2] = np.clip(brightness - int(row["HDWI"] * 30),        0, 255)
         noise = np.random.randint(-5, 5, frame.shape, dtype=np.int16)
@@ -442,60 +509,35 @@ class WildfireEnv(gym.Env):
         }
         df_features = pd.DataFrame([features])
 
-        # ── Step 1: DT model decides whether weather warrants a picture ───────
+        # ── Step 1: DT model decides whether to take a picture ────────────────
         take_picture = int(self.dt_model.predict(df_features)[0])
 
-        # ── Step 2: Camera Self-Check state machine ───────────────────────────
-        #
-        # The state machine runs ONLY when take_picture == 1 (i.e. the DT
-        # model already decided a picture should be taken).
-        #
-        # Corrected behaviour:
-        #
-        #   CAMERA_OK      → picture taken, ML runs normally
-        #
-        #   FAULT_WARNING  → picture IS taken (camera still physically fires),
-        #   FAULT_CRITICAL   but image quality is flagged as too poor to trust.
-        #                    ml_result is forced to 0 — fire cannot be detected
-        #                    from a degraded image. Energy for camera IS charged
-        #                    because the hardware still activated.
-        #
-        #   SHUT_CAMERA    → camera is hardware-failed (3+ consecutive faults).
-        #                    take_picture is set to 0 — camera does NOT fire.
-        #                    No camera/ML energy charged. Locked for episode.
-        #
-        # image_ok is the flag that separates WARNING/CRITICAL from OK:
-        #   True  → trust the ML result
-        #   False → zero out ml_result (degraded image, unreliable inference)
-        # ─────────────────────────────────────────────────────────────────────
-        camera_signal   = "CAMERA_OK"
-        camera_faults   = []
-        image_ok        = True          # True → ML result is trustworthy
+        # ── Step 2: Camera Self-Check ─────────────────────────────────────────
+        camera_signal = "CAMERA_OK"
+        camera_faults = []
+        image_ok      = True
 
         if take_picture:
-            sim_frame = self._synthesize_frame(row)   # swap for real frame in production
+            # Get real image from dataset (or synthesized fallback)
+            frame = self._get_frame(row)
+
             camera_signal, camera_faults, image_ok = self.camera_check.check(
-                sim_frame, self.current_step
+                frame, self.current_step
             )
 
             if camera_signal == "SHUT_CAMERA":
-                # Hardware failure — suppress the picture entirely
+                # Hardware failure — suppress picture entirely
                 take_picture = 0
                 print(
                     f"[CameraCheck] SHUT_CAMERA at step {self.current_step} | "
-                    f"Faults: {camera_faults} | Camera suppressed for rest of episode."
+                    f"Faults: {camera_faults} | Camera suppressed."
                 )
-            else:
-                # WARNING or CRITICAL: picture was taken but image is faulty.
-                # Log the degraded state without suppressing take_picture.
-                if not image_ok:
-                    print(
-                        f"[CameraCheck] {camera_signal} at step {self.current_step} | "
-                        f"Faults: {camera_faults} | "
-                        f"Picture taken but image quality too poor for ML — "
-                        f"ml_result forced to 0."
-                    )
-        # ─────────────────────────────────────────────────────────────────────
+            elif not image_ok:
+                # WARNING or CRITICAL — picture taken but image too poor for ML
+                print(
+                    f"[CameraCheck] {camera_signal} at step {self.current_step} | "
+                    f"Faults: {camera_faults} | ml_result forced to 0."
+                )
 
         fire_rows = pd.concat([skipped_data, self.sensor_data.iloc[[self.current_step]]])
 
@@ -504,7 +546,7 @@ class WildfireEnv(gym.Env):
 
         if take_picture:
             if image_ok:
-                # Camera is healthy — run stochastic TP/FP simulation normally
+                # Camera healthy — run stochastic TP/FP simulation
                 ml_result = (
                     np.random.choice(
                         [1, 0],
@@ -522,16 +564,13 @@ class WildfireEnv(gym.Env):
                     )
                 )
             else:
-                # FAULT_WARNING or FAULT_CRITICAL:
-                # Image was captured but quality is degraded — cannot trust
-                # the ML inference output. Force ml_result = 0.
+                # Degraded image — cannot trust ML result
                 ml_result = 0
 
             if row["Label"] == 1 and ml_result == 1:
                 self.fire_detection_time = row["Timestamp"]
 
             self.last_image_timestamp = row["Timestamp"]
-        # ─────────────────────────────────────────────────────────────────────
 
         neighbor_comm_energy = (
             self.config["Neighborhood_Communication"]["num_neighbors"] *
@@ -566,29 +605,14 @@ class WildfireEnv(gym.Env):
         ) * time_skipped_hours
 
         # ── Step 4: Energy accounting ─────────────────────────────────────────
-        #
-        # E_camera_selfcheck: charged when take_picture_attempted == 1,
-        #   even if the check returned WARNING/CRITICAL — the processor ran.
-        #   NOT charged when SHUT_CAMERA suppressed take_picture to 0.
-        #
-        # E_proc_ml + E_camera_host: charged when take_picture == 1 after the
-        #   state machine. This means:
-        #   - CAMERA_OK      → charged (picture taken, ML ran)
-        #   - FAULT_WARNING  → charged (picture taken, ML ran but result zeroed)
-        #   - FAULT_CRITICAL → charged (picture taken, ML ran but result zeroed)
-        #   - SHUT_CAMERA    → NOT charged (take_picture was set to 0)
-        #
-        # E_comm: charged only when ml_result == 1 AND take_picture == 1,
-        #   which naturally cannot happen when image_ok is False (ml_result=0).
-        # ─────────────────────────────────────────────────────────────────────
         energy_used = (
             self.config["Energy_Constraints"]["E_proc_rl"]             +
             self.config["Energy_Constraints"]["E_temp_humidity_sensor"] +
             self.config["Energy_Constraints"]["E_anemometer_sensor"]    +
             standby_power_used                                          +
             (
-                self.config["Energy_Constraints"]["E_proc_ml"] +
-                self.config["Energy_Constraints"]["E_camera_host"] +
+                self.config["Energy_Constraints"]["E_proc_ml"]          +
+                self.config["Energy_Constraints"]["E_camera_host"]      +
                 self.config["Energy_Constraints"]["E_camera_selfcheck"]
                 if take_picture else 0
             )                                                           +
@@ -598,7 +622,6 @@ class WildfireEnv(gym.Env):
             )
         )
 
-        # Minute-by-minute battery depletion simulation over skipped time
         if self.battery_depletion_time is None:
             current_batt    = self.battery_energy
             max_batt_energy = self.max_battery_energy
@@ -665,7 +688,7 @@ class WildfireEnv(gym.Env):
             self.detection_time_list.append(self.missed_fire_time)
             done = True
 
-        # ── Store episode data ────────────────────────────────────────────────
+        # Store episode data
         self.episode_data["timestamps"].append(row["Timestamp"])
         self.episode_data["battery_levels"].append(self.battery_energy)
         self.episode_data["energy_budgets"].append(self.energy_budget)
@@ -680,8 +703,8 @@ class WildfireEnv(gym.Env):
         self.episode_data["ml_result"].append(ml_result)
         self.episode_data["take_a_picture"].append(take_picture)
         self.episode_data["label"].append(row["Label"])
-        self.episode_data["camera_signal"].append(camera_signal)      # NEW
-        self.episode_data["camera_faults"].append(                     # NEW
+        self.episode_data["camera_signal"].append(camera_signal)
+        self.episode_data["camera_faults"].append(
             "; ".join(camera_faults) if camera_faults else "none"
         )
 
@@ -724,7 +747,6 @@ class WildfireEnv(gym.Env):
 
     # ─────────────────────────────────────────────────────────────────────────
     def calculate_final_reward(self):
-        """Calculate the reward at the end of the episode."""
         if self.battery_depletion_time is not None and (
             not self.fire_start_time or
             self.battery_depletion_time < self.fire_start_time
@@ -747,7 +769,6 @@ class WildfireEnv(gym.Env):
 
     # ─────────────────────────────────────────────────────────────────────────
     def plot_episode_metrics(self, reason, final_reward):
-        """Generates and saves episode-specific plots inside episode_plots/."""
         file_name = self.config["file_name"]
         folder    = f"Inference/episode_plots_step_reward{file_name}"
         os.makedirs(folder, exist_ok=True)
@@ -777,12 +798,12 @@ class WildfireEnv(gym.Env):
         axs[10].scatter(self.episode_data["timestamps"], self.episode_data["ml_result"],          label="ML result [0, 1]",       color='green')
         axs[11].scatter(self.episode_data["timestamps"], self.episode_data["missed_fire_times"],  label="Missed Fire Time (min)", color='green')
         axs[12].scatter(self.episode_data["timestamps"], self.episode_data["reward"],
-                        label=f"Step Reward {reason} {final_reward}",                                                             color='green')
+                        label=f"Step Reward {reason} {final_reward}",                            color='green')
 
-        # ── NEW: Camera signal panel (axs[13] — was unused in original 7×2 grid)
-        signal_map    = {"CAMERA_OK": 0, "FAULT_WARNING": 1, "FAULT_CRITICAL": 2, "SHUT_CAMERA": 3}
-        signal_nums   = [signal_map.get(s, 0) for s in self.episode_data["camera_signal"]]
-        point_colors  = [
+        # Camera signal panel
+        signal_map   = {"CAMERA_OK": 0, "FAULT_WARNING": 1, "FAULT_CRITICAL": 2, "SHUT_CAMERA": 3}
+        signal_nums  = [signal_map.get(s, 0) for s in self.episode_data["camera_signal"]]
+        point_colors = [
             "green" if s == 0 else
             "orange" if s == 1 else
             "darkorange" if s == 2 else
