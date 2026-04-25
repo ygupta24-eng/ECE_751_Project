@@ -101,5 +101,6 @@
     "max_offset_per_sensor": 60, 
     "episode_length_days": 180,
     "parallel_batch_size": 25,
-    "file_name": "_episode_plots_step_reward_RL_beta0p5_0.90036452TP_0.58399005FP_noOffset_1dayReservedEnergy"
+    "file_name": "_episode_plots_step_reward_RL_beta0p5_0.90036452TP_0.58399005FP_noOffset_1dayReservedEnergy",
+    "ForcePictureWhenCritical": true
 }

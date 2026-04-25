@@ -358,17 +358,25 @@ class WildfireEnv(gym.Env):
 
         is_critical = temp_state == "Critical" or humidity_state == "Critical" or wind_state == "Critical"
 
-        if is_critical and self.neighbor_map.get(self.current_sensor):
+        # NEW: config option to force picture taking when critical and skip neighbor comm
+        force_picture_when_critical = bool(self.config.get("ForcePictureWhenCritical", False))
+
+        if is_critical and force_picture_when_critical:
+            # No comm attempts, no comm penalties. We just take a picture.
+            take_picture = 1
+            self.sensor_shared_states[self.current_sensor] = take_picture
+
+        elif is_critical and self.neighbor_map.get(self.current_sensor):
             take_picture = -1 # Sentinel for failure
             potential_neighbors = self.neighbor_map[self.current_sensor]
-            
+
             comm_fail_prob = self.config["Neighborhood_Communication"].get("comm_fail_prob", 0.0)
             retries = self.config["Neighborhood_Communication"].get("retries_per_neighbor", 2)
-            
+
             for neighbor_info in potential_neighbors:
                 neighbor_id = neighbor_info['id']
                 hops = neighbor_info['hops']
-                
+
                 # Energy cost scales with the square of the hops (distance)
                 energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
                 request_energy_cost = (hops ** 2) * energy_per_hop
@@ -376,13 +384,9 @@ class WildfireEnv(gym.Env):
                 for attempt in range(retries):
                     unreliable_sensor_penalty += request_energy_cost # Cost for each attempt
 
-                    # Simulate communication failure
                     if np.random.random() > comm_fail_prob:
-                        # Success!
                         take_picture = self.sensor_shared_states[neighbor_id]
 
-                        # Sender debt should accrue in ENERGY, not hops
-                        energy_per_hop = self.config["Energy_Constraints"].get("E_comm_hop", 0.05)
                         sender_msg_cost = (hops ** 2) * energy_per_hop  # quadratic with distance
 
                         if self.shared_lock is not None:
@@ -403,9 +407,9 @@ class WildfireEnv(gym.Env):
                         used_neighbor_risk = 1
                         comm_hops = hops
                         break
-                
+
                 if take_picture != -1:
-                    break # Exit neighbor loop, we got the data
+                    break
 
             if take_picture == -1:
                 # All neighbors failed, fall back to own (unreliable) data
@@ -413,16 +417,12 @@ class WildfireEnv(gym.Env):
                 df_features = pd.DataFrame([features])
                 take_picture = int(self.dt_model.predict(df_features)[0])
                 self.sensor_shared_states[self.current_sensor] = take_picture
+
         else:
             # Data is reliable, so calculate our own value
-            features = {
-                "avgtempC": row["Temperature_2m"],
-                "humid": row["Relative_Humidity_2m"]
-            }
+            features = {"avgtempC": row["Temperature_2m"], "humid": row["Relative_Humidity_2m"]}
             df_features = pd.DataFrame([features])
             take_picture = int(self.dt_model.predict(df_features)[0])
-            
-            # "Post" our new status to the shared state for others to see
             self.sensor_shared_states[self.current_sensor] = take_picture
         
         # Combine skipped rows and the RL-decided row
